@@ -4,6 +4,20 @@ export interface ApiResponse<T> {
   data: T
 }
 
+export interface PageResult<T> {
+  list: T[]
+  pageNum: number
+  pageSize: number
+  total: number
+}
+
+export interface PageParams {
+  pageNum?: number
+  pageSize?: number
+}
+
+export type TimestampMillis = number
+
 export interface PlatformGateway {
   id?: number
   platformId: string
@@ -13,9 +27,54 @@ export interface PlatformGateway {
   auth: number
   enable: number
   isDeleted?: number
-  createTime?: string
-  updateTime?: string
+  createTime?: TimestampMillis
+  updateTime?: TimestampMillis
   apiKey?: string | null
+}
+
+export interface PlatformAdmin {
+  id?: number
+  platformId: string
+  platformName?: string
+  username: string
+  adminRole: 'primary' | 'admin' | string
+  status: number
+  isDeleted?: number
+  createTime?: TimestampMillis
+  updateTime?: TimestampMillis
+}
+
+export interface UserAccount {
+  id?: number
+  username: string
+  token?: string
+  status?: number
+  managedPlatforms?: PlatformAdmin[]
+}
+
+export interface PlatformKeyApply {
+  id?: number
+  username: string
+  platformId: string
+  applyReason?: string
+  status: 0 | 1 | 2 | number
+  isDeleted?: number
+  apiKey?: string
+  createTime?: TimestampMillis
+  updateTime?: TimestampMillis
+}
+
+export interface PlatformGatewayAuth {
+  id?: number
+  username: string
+  platformId: string
+  apiKey: string
+  rateLimit?: number
+  expireTime?: TimestampMillis
+  status: number
+  isDeleted?: number
+  createTime?: TimestampMillis
+  updateTime?: TimestampMillis
 }
 
 export interface HttpConfig {
@@ -53,8 +112,8 @@ export interface PlatformTool {
   isDeleted?: number
   httpConfig: HttpConfig
   mappings: ProtocolMapping[]
-  createTime?: string
-  updateTime?: string
+  createTime?: TimestampMillis
+  updateTime?: TimestampMillis
 }
 
 export interface ToolPreview extends Omit<PlatformTool, 'toolId' | 'protocolId' | 'platformId'> {
@@ -76,4 +135,13 @@ export interface PlatformPayload {
 export interface OpenApiPreviewPayload {
   openApiJson: string
   endpoints?: string[]
+}
+
+export interface LoginPayload {
+  username: string
+  password: string
+}
+
+export interface KeyApplyPayload {
+  applyReason?: string
 }
