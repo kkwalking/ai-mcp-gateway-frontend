@@ -705,6 +705,27 @@ function removePreviewMapping(preview: ToolPreview, index: number) {
   preview.mappings.splice(index, 1)
 }
 
+function addMapping() {
+  if (!toolForm.mappings) {
+    toolForm.mappings = []
+  }
+  const mapping: ProtocolMapping = {
+    mappingType: 'request',
+    parentPath: '',
+    fieldName: '',
+    mcpPath: '',
+    mcpType: 'string',
+    mcpDesc: '',
+    isRequired: 0,
+    sortOrder: toolForm.mappings.length + 1,
+  }
+  toolForm.mappings.push(mapping)
+}
+
+function removeMapping(index: number) {
+  toolForm.mappings.splice(index, 1)
+}
+
 async function previewOpenApi() {
   if (!selectedPlatformId.value) return
   previewLoading.value = true
@@ -1329,7 +1350,62 @@ onMounted(bootstrap)
                 <label class="wide">描述<textarea v-model="toolForm.toolDescription" rows="3" :disabled="!canManagePlatform"></textarea></label>
                 <label class="wide">Headers<textarea v-model="toolForm.httpConfig.httpHeaders" rows="3" :disabled="!canManagePlatform"></textarea></label>
               </div>
-              <div class="mapping-view">
+              <div v-if="canManagePlatform" class="mapping-editor">
+                <div class="mapping-head">
+                  <div>
+                    <strong>字段映射</strong>
+                    <p class="mapping-hint">
+                      定义 MCP 客户端传入的参数，如何映射到平台方 HTTP 接口字段。
+                    </p>
+                  </div>
+                  <button class="secondary compact" @click="addMapping">
+                    <Plus :size="15" />
+                    添加字段
+                  </button>
+                </div>
+                <div class="mapping-table-head">
+                  <span>
+                    平台接口字段
+                    <em>平台方 HTTP 接口最终接收的字段名</em>
+                  </span>
+                  <span>
+                    MCP 入参路径
+                    <em>MCP 客户端调用 Tool 时填写的参数路径</em>
+                  </span>
+                  <span>
+                    参数类型
+                    <em>用于生成 schema 和参数校验</em>
+                  </span>
+                  <span>
+                    是否必填
+                    <em>勾选后客户端必须提供</em>
+                  </span>
+                  <span>操作</span>
+                </div>
+                <div v-for="(mapping, index) in toolForm.mappings" :key="index" class="mapping-row">
+                  <input v-model="mapping.fieldName" placeholder="例如 city 或 company.name" />
+                  <input v-model="mapping.mcpPath" placeholder="例如 city 或 company.name" />
+                  <select v-model="mapping.mcpType">
+                    <option value="string">string</option>
+                    <option value="number">number</option>
+                    <option value="boolean">boolean</option>
+                    <option value="object">object</option>
+                    <option value="array">array</option>
+                  </select>
+                  <label class="inline-check">
+                    <input v-model.number="mapping.isRequired" type="checkbox" :true-value="1" :false-value="0" />
+                    必填
+                  </label>
+                  <button class="icon-button danger" @click="removeMapping(index)">
+                    <Trash2 :size="14" />
+                  </button>
+                </div>
+                <div v-if="toolForm.mappings.length === 0" class="mapping-empty">
+                  <Braces :size="20" />
+                  <span>暂无映射配置</span>
+                </div>
+              </div>
+              <div v-else class="mapping-view">
                 <div class="mapping-view-head">
                   <strong>字段映射</strong>
                   <span>{{ toolForm.mappings?.length || 0 }} 条</span>
