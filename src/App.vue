@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ClipboardCheck,
   Database,
+  FileJson,
   FileCheck2,
   Inbox,
   KeyRound,
@@ -34,8 +35,10 @@ import type {
   PlatformKeyApply,
   PlatformPayload,
   PlatformTool,
+  ToolPreview,
   UserAccount,
 } from './types/gateway'
+import { sampleOpenApiJson } from './utils/samples'
 
 type ViewName =
   | 'login'
@@ -49,6 +52,7 @@ type ViewName =
   | 'platform-detail'
   | 'key-apply'
   | 'tool-editor'
+  | 'tool-openapi'
 type DetailMode = 'readonly' | 'manage'
 type ApplyStatus = 0 | 1 | 2
 type MessageModalState = { type: 'error' | 'warning'; title: string; text: string } | null
@@ -69,6 +73,7 @@ const adminPlatformTotal = ref(0)
 const usedPlatforms = ref<PlatformGateway[]>([])
 const usedPlatformTotal = ref(0)
 const tools = ref<PlatformTool[]>([])
+const previews = ref<ToolPreview[]>([])
 const admins = ref<PlatformAdmin[]>([])
 const myApiKeys = ref<PlatformGatewayAuth[]>([])
 const currentPlatformApiKey = ref<PlatformGatewayAuth | null>(null)
@@ -87,7 +92,9 @@ const searchText = ref('')
 const loading = ref(false)
 const toolLoading = ref(false)
 const platformApiKeyLoading = ref(false)
+const previewLoading = ref(false)
 const saving = ref(false)
+const savingPreviewKeys = ref<string[]>([])
 const errorText = ref('')
 const toastText = ref('')
 const newAdminUsername = ref('')
@@ -108,6 +115,7 @@ const keyApplyPlatformKeyword = ref('')
 const keyApplyPlatformOptions = ref<PlatformGateway[]>([])
 const keyApplyPlatformLoading = ref(false)
 const keyApplyFromDetail = ref(false)
+const openApiForm = reactive({ openApiJson: sampleOpenApiJson })
 
 const platformForm = reactive<PlatformPayload>({
   platformId: '',
@@ -639,10 +647,61 @@ function startCreateTool() {
   viewName.value = 'tool-editor'
 }
 
+function startOpenApiImport() {
+  previews.value = []
+  if (!openApiForm.openApiJson.trim()) {
+    openApiForm.openApiJson = sampleOpenApiJson
+  }
+  viewName.value = 'tool-openapi'
+}
+
 function openToolEditor(tool: PlatformTool) {
   selectedToolId.value = tool.toolId || null
   Object.assign(toolForm, JSON.parse(JSON.stringify(tool)))
   viewName.value = 'tool-editor'
+}
+
+function previewStatusText(preview: ToolPreview) {
+  if (preview.duplicate) return '已存在'
+  return '新 Tool'
+}
+
+function isPreviewSaving(key: string) {
+  return savingPreviewKeys.value.includes(key)
+}
+
+async function previewOpenApi() {
+  if (!selectedPlatformId.value) return
+  previewLoading.value = true
+  previews.value = []
+  try {
+    previews.value = await gatewayApi.previewOpenApi(selectedPlatformId.value, {
+      openApiJson: openApiForm.openApiJson,
+    })
+  } catch (error) {
+    handleError(error)
+  } finally {
+    previewLoading.value = false
+  }
+}
+
+async function savePreview(preview: ToolPreview, key: string) {
+  if (!selectedPlatformId.value) return
+  savingPreviewKeys.value = [...savingPreviewKeys.value, key]
+  try {
+    if (preview.duplicate && preview.existingToolId) {
+      await gatewayApi.updateTool(selectedPlatformId.value, preview.existingToolId, preview)
+      showToast('Tool 已覆盖更新')
+    } else {
+      await gatewayApi.createTool(selectedPlatformId.value, preview)
+      showToast('Tool 已导入')
+    }
+    await loadPlatformRelated()
+  } catch (error) {
+    handleError(error)
+  } finally {
+    savingPreviewKeys.value = savingPreviewKeys.value.filter((item) => item !== key)
+  }
 }
 
 async function saveTool() {
@@ -1011,7 +1070,10 @@ onMounted(bootstrap)
               <div v-if="platformMode === 'edit'" class="panel tools-panel">
                 <div class="panel-head">
                   <div><h2>Tool 列表</h2></div>
-                  <button v-if="canManagePlatform" class="secondary" @click="startCreateTool"><Plus :size="16" />新增 Tool</button>
+                  <div v-if="canManagePlatform" class="list-actions compact-actions">
+                    <button class="secondary" @click="startOpenApiImport"><FileJson :size="16" />OpenAPI 导入</button>
+                    <button class="secondary" @click="startCreateTool"><Plus :size="16" />新增 Tool</button>
+                  </div>
                 </div>
                 <div v-if="toolLoading" class="empty"><Activity :size="28" /><span>正在加载</span></div>
                 <div v-else class="tool-table" :class="{ readonly: !canManagePlatform }">
@@ -1101,6 +1163,48 @@ onMounted(bootstrap)
                   <Save :size="16" />提交申请
                 </button>
               </div>
+            </div>
+          </section>
+
+          <section v-if="viewName === 'tool-openapi'" class="page-stack">
+            <button class="back-link" @click="viewName = 'platform-detail'"><ArrowLeft :size="16" />返回平台</button>
+            <div class="panel">
+              <div class="panel-head">
+                <div><h2>OpenAPI 导入</h2></div>
+                <button class="primary" :disabled="previewLoading || !openApiForm.openApiJson.trim()" @click="previewOpenApi">
+                  <FileJson :size="16" />{{ previewLoading ? '解析中' : '解析预览' }}
+                </button>
+              </div>
+              <label>
+                OpenAPI JSON
+                <textarea v-model="openApiForm.openApiJson" class="json-area" rows="16"></textarea>
+              </label>
+              <div v-if="previews.length" class="preview-list">
+                <article v-for="(preview, previewIndex) in previews" :key="`${preview.toolName}-${previewIndex}`" class="preview-card">
+                  <div class="preview-row">
+                    <div class="preview-summary">
+                      <strong>{{ preview.toolName }}</strong>
+                      <em>{{ preview.toolDescription || '暂无描述' }}</em>
+                    </div>
+                    <span class="badge" :class="{ warning: preview.duplicate }">{{ previewStatusText(preview) }}</span>
+                    <span class="badge">{{ preview.httpConfig.httpMethod.toUpperCase() }}</span>
+                    <span class="badge">{{ preview.mappings.length }} 字段</span>
+                    <button
+                      class="secondary"
+                      :disabled="isPreviewSaving(String(previewIndex))"
+                      @click="savePreview(preview, String(previewIndex))"
+                    >
+                      <Activity v-if="isPreviewSaving(String(previewIndex))" :size="15" />
+                      <Save v-else :size="15" />
+                      {{ preview.duplicate ? '覆盖更新' : '保存 Tool' }}
+                    </button>
+                  </div>
+                  <p v-if="preview.duplicate" class="preview-conflict-hint">
+                    Tool 名称已存在，保存时会覆盖更新已有 Tool 配置。
+                  </p>
+                </article>
+              </div>
+              <div v-else class="empty compact-empty"><FileJson :size="24" /><span>解析后展示可导入的 Tool</span></div>
             </div>
           </section>
 
