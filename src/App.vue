@@ -4,7 +4,10 @@ import {
   Activity,
   AlertCircle,
   ArrowLeft,
+  Braces,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ClipboardCheck,
   Database,
   FileJson,
@@ -35,6 +38,7 @@ import type {
   PlatformKeyApply,
   PlatformPayload,
   PlatformTool,
+  ProtocolMapping,
   ToolPreview,
   UserAccount,
 } from './types/gateway'
@@ -74,6 +78,7 @@ const usedPlatforms = ref<PlatformGateway[]>([])
 const usedPlatformTotal = ref(0)
 const tools = ref<PlatformTool[]>([])
 const previews = ref<ToolPreview[]>([])
+const expandedPreviewTools = ref<string[]>([])
 const admins = ref<PlatformAdmin[]>([])
 const myApiKeys = ref<PlatformGatewayAuth[]>([])
 const currentPlatformApiKey = ref<PlatformGatewayAuth | null>(null)
@@ -649,6 +654,8 @@ function startCreateTool() {
 
 function startOpenApiImport() {
   previews.value = []
+  expandedPreviewTools.value = []
+  savingPreviewKeys.value = []
   if (!openApiForm.openApiJson.trim()) {
     openApiForm.openApiJson = sampleOpenApiJson
   }
@@ -670,10 +677,40 @@ function isPreviewSaving(key: string) {
   return savingPreviewKeys.value.includes(key)
 }
 
+function isPreviewExpanded(key: string) {
+  return expandedPreviewTools.value.includes(key)
+}
+
+function togglePreviewFields(key: string) {
+  expandedPreviewTools.value = isPreviewExpanded(key)
+    ? expandedPreviewTools.value.filter((item) => item !== key)
+    : [...expandedPreviewTools.value, key]
+}
+
+function addPreviewMapping(preview: ToolPreview) {
+  const mapping: ProtocolMapping = {
+    mappingType: 'request',
+    parentPath: '',
+    fieldName: '',
+    mcpPath: '',
+    mcpType: 'string',
+    mcpDesc: '',
+    isRequired: 0,
+    sortOrder: preview.mappings.length + 1,
+  }
+  preview.mappings.push(mapping)
+}
+
+function removePreviewMapping(preview: ToolPreview, index: number) {
+  preview.mappings.splice(index, 1)
+}
+
 async function previewOpenApi() {
   if (!selectedPlatformId.value) return
   previewLoading.value = true
   previews.value = []
+  expandedPreviewTools.value = []
+  savingPreviewKeys.value = []
   try {
     previews.value = await gatewayApi.previewOpenApi(selectedPlatformId.value, {
       openApiJson: openApiForm.openApiJson,
@@ -1189,6 +1226,11 @@ onMounted(bootstrap)
                     <span class="badge" :class="{ warning: preview.duplicate }">{{ previewStatusText(preview) }}</span>
                     <span class="badge">{{ preview.httpConfig.httpMethod.toUpperCase() }}</span>
                     <span class="badge">{{ preview.mappings.length }} 字段</span>
+                    <button class="secondary compact" @click="togglePreviewFields(String(previewIndex))">
+                      <ChevronUp v-if="isPreviewExpanded(String(previewIndex))" :size="15" />
+                      <ChevronDown v-else :size="15" />
+                      {{ isPreviewExpanded(String(previewIndex)) ? '收起字段' : '展开字段' }}
+                    </button>
                     <button
                       class="secondary"
                       :disabled="isPreviewSaving(String(previewIndex))"
@@ -1202,6 +1244,69 @@ onMounted(bootstrap)
                   <p v-if="preview.duplicate" class="preview-conflict-hint">
                     Tool 名称已存在，保存时会覆盖更新已有 Tool 配置。
                   </p>
+                  <div v-if="isPreviewExpanded(String(previewIndex))" class="preview-fields">
+                    <div class="preview-draft-grid">
+                      <label>
+                        Tool Name
+                        <input v-model="preview.toolName" />
+                      </label>
+                      <label>
+                        方法
+                        <select v-model="preview.httpConfig.httpMethod">
+                          <option value="get">GET</option>
+                          <option value="post">POST</option>
+                          <option value="put">PUT</option>
+                          <option value="delete">DELETE</option>
+                        </select>
+                      </label>
+                      <label class="wide">
+                        HTTP URL
+                        <input v-model="preview.httpConfig.httpUrl" />
+                      </label>
+                      <label class="wide">
+                        描述
+                        <textarea v-model="preview.toolDescription" rows="2"></textarea>
+                      </label>
+                    </div>
+                    <div class="preview-section-title">
+                      <strong>字段映射</strong>
+                      <button class="secondary compact" @click="addPreviewMapping(preview)">
+                        <Plus :size="15" />
+                        添加字段
+                      </button>
+                    </div>
+                    <div class="preview-field-head">
+                      <span>平台接口字段</span>
+                      <span>MCP 入参路径</span>
+                      <span>类型</span>
+                      <span>必填</span>
+                      <span>字段说明</span>
+                      <span>操作</span>
+                    </div>
+                    <div v-for="(mapping, index) in preview.mappings" :key="index" class="preview-field-row">
+                      <input v-model="mapping.fieldName" placeholder="平台接口字段" />
+                      <input v-model="mapping.mcpPath" placeholder="MCP 入参路径" />
+                      <select v-model="mapping.mcpType">
+                        <option value="string">string</option>
+                        <option value="number">number</option>
+                        <option value="boolean">boolean</option>
+                        <option value="object">object</option>
+                        <option value="array">array</option>
+                      </select>
+                      <label class="preview-required">
+                        <input v-model.number="mapping.isRequired" type="checkbox" :true-value="1" :false-value="0" />
+                        {{ mapping.isRequired === 1 ? '必填' : '可选' }}
+                      </label>
+                      <input v-model="mapping.mcpDesc" placeholder="字段说明" />
+                      <button class="icon-button danger" @click="removePreviewMapping(preview, index)">
+                        <Trash2 :size="14" />
+                      </button>
+                    </div>
+                    <div v-if="preview.mappings.length === 0" class="empty compact-empty">
+                      <Braces :size="20" />
+                      <span>该接口没有解析到可导入字段。</span>
+                    </div>
+                  </div>
                 </article>
               </div>
               <div v-else class="empty compact-empty"><FileJson :size="24" /><span>解析后展示可导入的 Tool</span></div>
