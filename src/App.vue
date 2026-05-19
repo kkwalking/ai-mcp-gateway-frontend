@@ -59,7 +59,7 @@ type ViewName =
   | 'tool-openapi'
 type DetailMode = 'readonly' | 'manage'
 type ApplyStatus = 0 | 1 | 2
-type MessageModalState = { type: 'error' | 'warning'; title: string; text: string } | null
+type MessageModalState = { type: 'success' | 'error' | 'warning'; title: string; text: string } | null
 
 const DEFAULT_PAGE_SIZE = 10
 const statusOptions: Array<{ label: string; value: ApplyStatus }> = [
@@ -204,8 +204,16 @@ function handleError(error: unknown) {
   errorText.value = errorMessage(error)
 }
 
-function showMessageModal(title: string, text: string, type: 'error' | 'warning' = 'error') {
+function showMessageModal(title: string, text: string, type: 'success' | 'error' | 'warning' = 'error') {
   messageModal.value = { title, text, type }
+}
+
+function showSuccessModal(title: string, text = '操作已成功完成') {
+  showMessageModal(title, text, 'success')
+}
+
+function showFailureModal(title: string, error: unknown) {
+  showMessageModal(title, errorMessage(error))
 }
 
 function closeMessageModal() {
@@ -585,6 +593,8 @@ function startCreatePlatform() {
 async function savePlatform() {
   saving.value = true
   try {
+    let successTitle = ''
+    let successText = ''
     if (platformMode.value === 'create') {
       const created = await gatewayApi.createPlatform(platformForm)
       selectedPlatformId.value = created.platformId
@@ -594,16 +604,21 @@ async function savePlatform() {
       platformMode.value = 'edit'
       detailMode.value = 'manage'
       activeMenu.value = 'managed-platforms'
-      showToast('平台已注册')
+      successTitle = '平台注册成功'
+      successText = `平台 ${created.platformName || created.platformId} 已注册。`
     } else if (selectedPlatformId.value) {
       const updated = await gatewayApi.updatePlatform(selectedPlatformId.value, platformForm)
       platforms.value = platforms.value.map((item) => (item.platformId === updated.platformId ? updated : item))
       fillPlatformForm(updated)
-      showToast('平台已更新')
+      successTitle = '平台保存成功'
+      successText = `平台 ${updated.platformName || updated.platformId} 已更新。`
     }
     await loadPlatformRelated()
+    if (successTitle) {
+      showSuccessModal(successTitle, successText)
+    }
   } catch (error) {
-    handleError(error)
+    showFailureModal('平台保存失败', error)
   } finally {
     saving.value = false
   }
@@ -638,9 +653,9 @@ async function submitKeyApply() {
       myApplyStatus.value = 0
       await loadMyKeyApplies(1)
     }
-    showToast('API Key 申请已提交')
+    showSuccessModal('申请提交成功', 'API Key 申请已提交，请等待平台管理员审批。')
   } catch (error) {
-    showMessageModal('申请提交失败', errorMessage(error))
+    showFailureModal('申请提交失败', error)
   } finally {
     saving.value = false
   }
@@ -747,16 +762,21 @@ async function savePreview(preview: ToolPreview, key: string) {
   if (!selectedPlatformId.value) return
   savingPreviewKeys.value = [...savingPreviewKeys.value, key]
   try {
+    let successTitle = ''
+    let successText = ''
     if (preview.duplicate && preview.existingToolId) {
       await gatewayApi.updateTool(selectedPlatformId.value, preview.existingToolId, preview)
-      showToast('Tool 已覆盖更新')
+      successTitle = 'Tool 覆盖更新成功'
+      successText = `Tool ${preview.toolName} 已覆盖更新。`
     } else {
       await gatewayApi.createTool(selectedPlatformId.value, preview)
-      showToast('Tool 已导入')
+      successTitle = 'Tool 保存成功'
+      successText = `Tool ${preview.toolName} 已导入。`
     }
     await loadPlatformRelated()
+    showSuccessModal(successTitle, successText)
   } catch (error) {
-    handleError(error)
+    showFailureModal('Tool 保存失败', error)
   } finally {
     savingPreviewKeys.value = savingPreviewKeys.value.filter((item) => item !== key)
   }
@@ -766,17 +786,19 @@ async function saveTool() {
   if (!selectedPlatformId.value) return
   saving.value = true
   try {
+    let successText = ''
     if (selectedToolId.value) {
       await gatewayApi.updateTool(selectedPlatformId.value, selectedToolId.value, toolForm)
-      showToast('Tool 已更新')
+      successText = `Tool ${toolForm.toolName} 已更新。`
     } else {
       await gatewayApi.createTool(selectedPlatformId.value, toolForm)
-      showToast('Tool 已创建')
+      successText = `Tool ${toolForm.toolName} 已创建。`
     }
     viewName.value = 'platform-detail'
     await loadPlatformRelated()
+    showSuccessModal('Tool 保存成功', successText)
   } catch (error) {
-    handleError(error)
+    showFailureModal('Tool 保存失败', error)
   } finally {
     saving.value = false
   }
@@ -787,8 +809,9 @@ async function toggleTool(tool: PlatformTool) {
   try {
     await gatewayApi.setToolEnable(selectedPlatformId.value, tool.toolId, tool.enable === 1 ? 0 : 1)
     await loadPlatformRelated()
+    showSuccessModal('Tool 状态保存成功', `Tool ${tool.toolName} 已${tool.enable === 1 ? '禁用' : '启用'}。`)
   } catch (error) {
-    handleError(error)
+    showFailureModal('Tool 状态保存失败', error)
   }
 }
 
@@ -798,15 +821,16 @@ async function removeTool(tool: PlatformTool) {
   try {
     await gatewayApi.deleteTool(selectedPlatformId.value, tool.toolId)
     await loadPlatformRelated()
+    showSuccessModal('Tool 删除成功', `Tool ${tool.toolName} 已软删除。`)
   } catch (error) {
-    handleError(error)
+    showFailureModal('Tool 删除失败', error)
   }
 }
 
 async function addAdmin() {
   if (!selectedPlatformId.value || !newAdminUsername.value.trim()) return
   if (!isPlatformPrimaryAdmin.value) {
-    handleError(new Error('仅平台负责人可添加普通管理员'))
+    showMessageModal('添加管理员失败', '仅平台负责人可添加普通管理员')
     return
   }
   try {
@@ -814,9 +838,9 @@ async function addAdmin() {
     newAdminUsername.value = ''
     const adminPage = await gatewayApi.listAdmins(selectedPlatformId.value, { pageNum: 1, pageSize: 100 })
     admins.value = adminPage.list
-    showToast('管理员已添加')
+    showSuccessModal('管理员保存成功', '普通管理员已添加。')
   } catch (error) {
-    handleError(error)
+    showFailureModal('管理员保存失败', error)
   }
 }
 
@@ -826,9 +850,9 @@ async function approveApply(apply: PlatformKeyApply) {
     const approved = await gatewayApi.approveKeyApply(apply.platformId, apply.id)
     myApprovals.value = myApprovals.value.filter((item) => item.id !== apply.id)
     await loadMyApiKeys(apiKeyPage.value)
-    showToast(`已同意，API Key：${approved.apiKey}`)
+    showSuccessModal('审批保存成功', `已同意申请，API Key：${approved.apiKey}`)
   } catch (error) {
-    handleError(error)
+    showFailureModal('审批保存失败', error)
   }
 }
 
@@ -837,9 +861,9 @@ async function rejectApply(apply: PlatformKeyApply) {
   try {
     await gatewayApi.rejectKeyApply(apply.platformId, apply.id)
     myApprovals.value = myApprovals.value.filter((item) => item.id !== apply.id)
-    showToast('已拒绝申请')
+    showSuccessModal('审批保存成功', '已拒绝申请。')
   } catch (error) {
-    handleError(error)
+    showFailureModal('审批保存失败', error)
   }
 }
 
@@ -1437,8 +1461,9 @@ onMounted(bootstrap)
       <div v-if="messageModal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="message-modal-title" @click.self="closeMessageModal">
         <div class="result-modal" :class="messageModal.type">
           <span class="result-modal-icon">
+            <CheckCircle2 v-if="messageModal.type === 'success'" :size="22" />
             <AlertCircle v-if="messageModal.type === 'error'" :size="22" />
-            <TriangleAlert v-else :size="22" />
+            <TriangleAlert v-if="messageModal.type === 'warning'" :size="22" />
           </span>
           <div class="result-modal-body">
             <h2 id="message-modal-title">{{ messageModal.title }}</h2>
