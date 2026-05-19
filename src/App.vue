@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter, type RouteLocationRaw } from 'vue-router'
 import {
   Activity,
   AlertCircle,
@@ -60,8 +61,11 @@ type ViewName =
 type DetailMode = 'readonly' | 'manage'
 type ApplyStatus = 0 | 1 | 2
 type MessageModalState = { type: 'success' | 'error' | 'warning'; title: string; text: string } | null
+type BreadcrumbItem = { label: string; to?: RouteLocationRaw }
 
 const DEFAULT_PAGE_SIZE = 10
+const route = useRoute()
+const router = useRouter()
 const statusOptions: Array<{ label: string; value: ApplyStatus }> = [
   { label: '正在进行中', value: 0 },
   { label: '已通过', value: 1 },
@@ -180,6 +184,57 @@ const isPlatformPrimaryAdmin = computed(() =>
       )
     : false,
 )
+const platformDetailListRoute = computed(() => {
+  if (route.name === 'managed-platform-detail') return { name: 'managed-platforms' }
+  if (route.name === 'used-platform-detail') return { name: 'used-platforms' }
+  return { name: 'platform-list' }
+})
+const platformDetailRootLabel = computed(() => {
+  if (route.name === 'managed-platform-detail') return '我管理的'
+  if (route.name === 'used-platform-detail') return '我使用的'
+  return '平台列表'
+})
+const platformDetailRoute = computed<RouteLocationRaw>(() => {
+  if (!selectedPlatformId.value) return { name: 'platform-list' }
+  if (route.name === 'managed-platform-detail' || activeMenu.value === 'managed-platforms') return { name: 'managed-platform-detail', params: { platformId: selectedPlatformId.value } }
+  if (route.name === 'used-platform-detail' || activeMenu.value === 'used-platforms') return { name: 'used-platform-detail', params: { platformId: selectedPlatformId.value } }
+  return { name: 'platform-detail', params: { platformId: selectedPlatformId.value } }
+})
+const backRoute = computed<RouteLocationRaw>(() => {
+  if (viewName.value === 'platform-detail') return platformDetailListRoute.value
+  if (viewName.value === 'key-apply') return keyApplyFromDetail.value ? platformDetailRoute.value : { name: 'my-api-keys' }
+  if (viewName.value === 'tool-editor' || viewName.value === 'tool-openapi') return platformDetailRoute.value
+  return { name: 'platform-list' }
+})
+const breadcrumbs = computed<BreadcrumbItem[]>(() => {
+  const platformName = platformMode.value === 'create'
+    ? '注册平台'
+    : platformForm.platformName || selectedPlatformId.value || '平台详情'
+
+  if (viewName.value === 'login') return [{ label: '登录' }]
+  if (viewName.value === 'platform-list') return [{ label: '平台列表' }]
+  if (viewName.value === 'managed-platforms') return [{ label: '我管理的' }]
+  if (viewName.value === 'used-platforms') return [{ label: '我使用的' }]
+  if (viewName.value === 'my-api-keys') return [{ label: '我的 API Key' }]
+  if (viewName.value === 'my-key-applies') return [{ label: '我的申请' }]
+  if (viewName.value === 'my-approvals') return [{ label: '我的审批' }]
+  if (viewName.value === 'platform-detail') {
+    if (platformMode.value === 'create') return [{ label: '平台列表', to: { name: 'platform-list' } }, { label: '注册平台' }]
+    return [{ label: platformDetailRootLabel.value, to: platformDetailListRoute.value }, { label: platformName }]
+  }
+  if (viewName.value === 'key-apply') {
+    return keyApplyFromDetail.value
+      ? [{ label: platformName, to: platformDetailRoute.value }, { label: 'API Key 申请' }]
+      : [{ label: '我的 API Key', to: { name: 'my-api-keys' } }, { label: '申请' }]
+  }
+  if (viewName.value === 'tool-openapi') {
+    return [{ label: '我管理的', to: { name: 'managed-platforms' } }, { label: platformName, to: platformDetailRoute.value }, { label: 'OpenAPI 导入' }]
+  }
+  if (viewName.value === 'tool-editor') {
+    return [{ label: '我管理的', to: { name: 'managed-platforms' } }, { label: platformName, to: platformDetailRoute.value }, { label: selectedToolId.value ? '编辑 Tool' : '新增 Tool' }]
+  }
+  return []
+})
 
 function pageCount(total: number, pageSize = DEFAULT_PAGE_SIZE) {
   return Math.max(1, Math.ceil(total / pageSize))
@@ -422,19 +477,236 @@ async function loadMyApprovals(pageNum = approvalPage.value) {
   }
 }
 
-async function bootstrap() {
-  if (!token.value) return
+function routeParam(name: string) {
+  const value = route.params[name]
+  return Array.isArray(value) ? value[0] : value || ''
+}
+
+function routeToolId() {
+  const value = Number(routeParam('toolId'))
+  return Number.isFinite(value) ? value : null
+}
+
+function resetRouteDetailState() {
+  selectedPlatformId.value = ''
+  selectedToolId.value = null
+  currentPlatformApiKey.value = null
+  platformApiKeyLoading.value = false
+  keyApplyFromDetail.value = false
+}
+
+async function bootstrapAuth() {
+  if (!token.value) return false
   setAuthToken(token.value)
   try {
     await loadMe()
-    await Promise.all([loadPlatforms(1), loadMyApiKeys(1)])
-    viewName.value = 'platform-list'
-    activeMenu.value = 'platform-list'
+    return true
   } catch (error) {
     setAuthToken('')
     token.value = ''
-    viewName.value = 'login'
     handleError(error)
+    return false
+  }
+}
+
+async function loadPlatformDetail(platformId: string, mode: DetailMode) {
+  selectedPlatformId.value = platformId
+  selectedToolId.value = null
+  currentPlatformApiKey.value = null
+  detailMode.value = mode
+  platformMode.value = 'edit'
+
+  try {
+    const cached = platforms.value.find((item) => item.platformId === platformId)
+      || usedPlatforms.value.find((item) => item.platformId === platformId)
+    const platform = cached || await gatewayApi.getPlatform(platformId)
+    fillPlatformForm(platform)
+    await Promise.all([loadPlatformRelated(), loadCurrentPlatformApiKey()])
+  } catch (error) {
+    handleError(error)
+  }
+}
+
+async function loadToolRoute(platformId: string, toolId: number | null) {
+  await loadPlatformDetail(platformId, 'manage')
+  selectedToolId.value = toolId
+  if (toolId) {
+    const tool = tools.value.find((item) => item.toolId === toolId)
+    if (tool) {
+      Object.assign(toolForm, JSON.parse(JSON.stringify(tool)))
+    } else {
+      Object.assign(toolForm, blankTool())
+      handleError(new Error('未找到指定 Tool'))
+    }
+  } else {
+    Object.assign(toolForm, blankTool())
+  }
+}
+
+async function syncRoute() {
+  clearError()
+  const routeName = String(route.name || '')
+
+  if (!token.value && routeName !== 'login') {
+    viewName.value = 'login'
+    await router.replace({ name: 'login' })
+    return
+  }
+
+  if (token.value && !currentUser.value) {
+    const authed = await bootstrapAuth()
+    if (!authed) {
+      viewName.value = 'login'
+      await router.replace({ name: 'login' })
+      return
+    }
+  }
+
+  if (routeName === 'login') {
+    viewName.value = 'login'
+    activeMenu.value = 'platform-list'
+    return
+  }
+
+  if (routeName === 'platform-list') {
+    resetRouteDetailState()
+    viewName.value = 'platform-list'
+    activeMenu.value = 'platform-list'
+    await Promise.all([loadPlatforms(1), loadMyApiKeys(1)])
+    return
+  }
+
+  if (routeName === 'managed-platforms') {
+    resetRouteDetailState()
+    viewName.value = 'managed-platforms'
+    activeMenu.value = 'managed-platforms'
+    await loadMyAdminPlatforms(1)
+    return
+  }
+
+  if (routeName === 'used-platforms') {
+    resetRouteDetailState()
+    viewName.value = 'used-platforms'
+    activeMenu.value = 'used-platforms'
+    await loadMyUsedPlatforms(1)
+    return
+  }
+
+  if (routeName === 'my-api-keys') {
+    resetRouteDetailState()
+    viewName.value = 'my-api-keys'
+    activeMenu.value = 'my-api-keys'
+    await loadMyApiKeys(1)
+    return
+  }
+
+  if (routeName === 'api-key-apply') {
+    resetRouteDetailState()
+    viewName.value = 'key-apply'
+    activeMenu.value = 'key-apply'
+    resetKeyApplyState()
+    return
+  }
+
+  if (routeName === 'my-key-applies') {
+    resetRouteDetailState()
+    viewName.value = 'my-key-applies'
+    activeMenu.value = 'my-key-applies'
+    myApplyPage.value = 1
+    await loadMyKeyApplies(1)
+    return
+  }
+
+  if (routeName === 'my-approvals') {
+    resetRouteDetailState()
+    viewName.value = 'my-approvals'
+    activeMenu.value = 'my-approvals'
+    approvalPage.value = 1
+    await loadMyApprovals(1)
+    return
+  }
+
+  if (routeName === 'platform-new') {
+    viewName.value = 'platform-detail'
+    activeMenu.value = 'platform-list'
+    selectedPlatformId.value = ''
+    selectedToolId.value = null
+    currentPlatformApiKey.value = null
+    detailMode.value = 'manage'
+    platformMode.value = 'create'
+    tools.value = []
+    admins.value = []
+    resetPlatformForm()
+    return
+  }
+
+  if (routeName === 'platform-detail' || routeName === 'managed-platform-detail' || routeName === 'used-platform-detail') {
+    const platformId = routeParam('platformId')
+    viewName.value = 'platform-detail'
+    activeMenu.value = routeName === 'managed-platform-detail' ? 'managed-platforms' : routeName === 'used-platform-detail' ? 'used-platforms' : 'platform-list'
+    await loadPlatformDetail(platformId, routeName === 'managed-platform-detail' ? 'manage' : 'readonly')
+    return
+  }
+
+  if (routeName === 'platform-key-apply') {
+    const platformId = routeParam('platformId')
+    viewName.value = 'key-apply'
+    activeMenu.value = 'platform-list'
+    keyApplyFromDetail.value = true
+    resetKeyApplyState()
+    keyApplyPlatformKeyword.value = platformId
+    await loadPlatformDetail(platformId, 'readonly')
+    return
+  }
+
+  if (routeName === 'tool-new') {
+    const platformId = routeParam('platformId')
+    viewName.value = 'tool-editor'
+    activeMenu.value = 'managed-platforms'
+    await loadToolRoute(platformId, null)
+    return
+  }
+
+  if (routeName === 'tool-editor') {
+    const platformId = routeParam('platformId')
+    viewName.value = 'tool-editor'
+    activeMenu.value = 'managed-platforms'
+    await loadToolRoute(platformId, routeToolId())
+    return
+  }
+
+  if (routeName === 'tool-openapi') {
+    const platformId = routeParam('platformId')
+    viewName.value = 'tool-openapi'
+    activeMenu.value = 'managed-platforms'
+    previews.value = []
+    expandedPreviewTools.value = []
+    savingPreviewKeys.value = []
+    if (!openApiForm.openApiJson.trim()) {
+      openApiForm.openApiJson = sampleOpenApiJson
+    }
+    await loadPlatformDetail(platformId, 'manage')
+  }
+}
+
+async function navigateTo(to: RouteLocationRaw) {
+  await router.push(to)
+}
+
+async function navigate(view: ViewName) {
+  const routeMap: Partial<Record<ViewName, RouteLocationRaw>> = {
+    'platform-list': { name: 'platform-list' },
+    'managed-platforms': { name: 'managed-platforms' },
+    'used-platforms': { name: 'used-platforms' },
+    'my-api-keys': { name: 'my-api-keys' },
+    'key-apply': { name: 'api-key-apply' },
+    'my-key-applies': { name: 'my-key-applies' },
+    'my-approvals': { name: 'my-approvals' },
+    'register-platform': { name: 'platform-new' },
+  }
+  const to = routeMap[view]
+  if (to) {
+    await navigateTo(to)
   }
 }
 
@@ -450,9 +722,7 @@ async function login() {
     setAuthToken(token.value)
     currentUser.value = user
     await loadMe()
-    await Promise.all([loadPlatforms(1), loadMyApiKeys(1)])
-    viewName.value = 'platform-list'
-    activeMenu.value = 'platform-list'
+    await router.push({ name: 'platform-list' })
     showToast('登录成功')
   } catch (error) {
     handleError(error)
@@ -478,36 +748,7 @@ function confirmLogout() {
   tools.value = []
   myApiKeys.value = []
   currentPlatformApiKey.value = null
-  viewName.value = 'login'
-}
-
-async function navigate(view: ViewName) {
-  clearError()
-  activeMenu.value = view
-  viewName.value = view
-  selectedPlatformId.value = ''
-  selectedToolId.value = null
-  currentPlatformApiKey.value = null
-  if (view !== 'key-apply') {
-    keyApplyFromDetail.value = false
-  }
-  if (view === 'platform-list') await loadPlatforms(1)
-  if (view === 'managed-platforms') await loadMyAdminPlatforms(1)
-  if (view === 'used-platforms') await loadMyUsedPlatforms(1)
-  if (view === 'my-api-keys') await loadMyApiKeys(1)
-  if (view === 'key-apply') {
-    keyApplyFromDetail.value = false
-    resetKeyApplyState()
-  }
-  if (view === 'my-key-applies') {
-    myApplyPage.value = 1
-    await loadMyKeyApplies(1)
-  }
-  if (view === 'my-approvals') {
-    approvalPage.value = 1
-    await loadMyApprovals(1)
-  }
-  if (view === 'register-platform') startCreatePlatform()
+  router.push({ name: 'login' })
 }
 
 async function searchPlatforms() {
@@ -516,38 +757,25 @@ async function searchPlatforms() {
 }
 
 async function openPlatformById(platformId: string, mode: DetailMode) {
-  clearError()
-  const cached = platforms.value.find((item) => item.platformId === platformId) || usedPlatforms.value.find((item) => item.platformId === platformId)
-  if (cached) {
-    await openPlatform(cached, mode)
-    return
-  }
-  try {
-    const platform = await gatewayApi.getPlatform(platformId)
-    await openPlatform(platform, mode)
-  } catch (error) {
-    handleError(error)
-  }
+  await navigateTo({
+    name: mode === 'manage' ? 'managed-platform-detail' : 'platform-detail',
+    params: { platformId },
+  })
 }
 
 async function openManagedPlatform(platform: PlatformAdmin) {
-  const cached = platforms.value.find((item) => item.platformId === platform.platformId) || usedPlatforms.value.find((item) => item.platformId === platform.platformId)
-  if (cached) {
-    await openPlatform(cached, 'manage')
-    return
-  }
-  await openPlatformById(platform.platformId, 'manage')
+  await navigateTo({ name: 'managed-platform-detail', params: { platformId: platform.platformId } })
 }
 
 async function openPlatform(platform: PlatformGateway, mode: DetailMode) {
-  selectedPlatformId.value = platform.platformId
-  selectedToolId.value = null
-  currentPlatformApiKey.value = null
-  detailMode.value = mode
-  platformMode.value = 'edit'
-  fillPlatformForm(platform)
-  viewName.value = 'platform-detail'
-  await Promise.all([loadPlatformRelated(), loadCurrentPlatformApiKey()])
+  await navigateTo({
+    name: activeMenu.value === 'used-platforms'
+      ? 'used-platform-detail'
+      : mode === 'manage'
+        ? 'managed-platform-detail'
+        : 'platform-detail',
+    params: { platformId: platform.platformId },
+  })
 }
 
 async function loadPlatformRelated() {
@@ -574,20 +802,11 @@ async function loadPlatformRelated() {
 }
 
 function goBackToMenu() {
-  viewName.value = activeMenu.value === 'key-apply' ? 'platform-list' : activeMenu.value
+  navigateTo(backRoute.value)
 }
 
 function startCreatePlatform() {
-  selectedPlatformId.value = ''
-  selectedToolId.value = null
-  currentPlatformApiKey.value = null
-  platformApiKeyLoading.value = false
-  detailMode.value = 'manage'
-  platformMode.value = 'create'
-  tools.value = []
-  admins.value = []
-  resetPlatformForm()
-  viewName.value = 'platform-detail'
+  navigateTo({ name: 'platform-new' })
 }
 
 async function savePlatform() {
@@ -606,6 +825,7 @@ async function savePlatform() {
       activeMenu.value = 'managed-platforms'
       successTitle = '平台注册成功'
       successText = `平台 ${created.platformName || created.platformId} 已注册。`
+      await router.replace({ name: 'managed-platform-detail', params: { platformId: created.platformId } })
     } else if (selectedPlatformId.value) {
       const updated = await gatewayApi.updatePlatform(selectedPlatformId.value, platformForm)
       platforms.value = platforms.value.map((item) => (item.platformId === updated.platformId ? updated : item))
@@ -626,18 +846,11 @@ async function savePlatform() {
 
 function startKeyApply() {
   if (hasCurrentPlatformApiKey.value) return
-  resetKeyApplyState()
-  keyApplyFromDetail.value = true
-  keyApplyPlatformKeyword.value = selectedPlatformId.value
-  viewName.value = 'key-apply'
+  navigateTo({ name: 'platform-key-apply', params: { platformId: selectedPlatformId.value } })
 }
 
 async function goBackFromKeyApply() {
-  if (keyApplyFromDetail.value) {
-    viewName.value = 'platform-detail'
-    return
-  }
-  await navigate('my-api-keys')
+  await navigateTo(backRoute.value)
 }
 
 async function submitKeyApply() {
@@ -646,12 +859,10 @@ async function submitKeyApply() {
   try {
     await gatewayApi.submitKeyApply(selectedPlatformId.value, keyApplyForm)
     if (keyApplyFromDetail.value) {
-      viewName.value = 'platform-detail'
+      await router.push(platformDetailRoute.value)
     } else {
-      activeMenu.value = 'my-key-applies'
-      viewName.value = 'my-key-applies'
       myApplyStatus.value = 0
-      await loadMyKeyApplies(1)
+      await router.push({ name: 'my-key-applies' })
     }
     showSuccessModal('申请提交成功', 'API Key 申请已提交，请等待平台管理员审批。')
   } catch (error) {
@@ -662,25 +873,18 @@ async function submitKeyApply() {
 }
 
 function startCreateTool() {
-  selectedToolId.value = null
-  Object.assign(toolForm, blankTool())
-  viewName.value = 'tool-editor'
+  if (!selectedPlatformId.value) return
+  navigateTo({ name: 'tool-new', params: { platformId: selectedPlatformId.value } })
 }
 
 function startOpenApiImport() {
-  previews.value = []
-  expandedPreviewTools.value = []
-  savingPreviewKeys.value = []
-  if (!openApiForm.openApiJson.trim()) {
-    openApiForm.openApiJson = sampleOpenApiJson
-  }
-  viewName.value = 'tool-openapi'
+  if (!selectedPlatformId.value) return
+  navigateTo({ name: 'tool-openapi', params: { platformId: selectedPlatformId.value } })
 }
 
 function openToolEditor(tool: PlatformTool) {
-  selectedToolId.value = tool.toolId || null
-  Object.assign(toolForm, JSON.parse(JSON.stringify(tool)))
-  viewName.value = 'tool-editor'
+  if (!selectedPlatformId.value || !tool.toolId) return
+  navigateTo({ name: 'tool-editor', params: { platformId: selectedPlatformId.value, toolId: tool.toolId } })
 }
 
 function previewStatusText(preview: ToolPreview) {
@@ -794,8 +998,8 @@ async function saveTool() {
       await gatewayApi.createTool(selectedPlatformId.value, toolForm)
       successText = `Tool ${toolForm.toolName} 已创建。`
     }
-    viewName.value = 'platform-detail'
     await loadPlatformRelated()
+    await router.push(platformDetailRoute.value)
     showSuccessModal('Tool 保存成功', successText)
   } catch (error) {
     showFailureModal('Tool 保存失败', error)
@@ -879,7 +1083,13 @@ async function changeApprovalStatus(status: ApplyStatus) {
   await loadMyApprovals(1)
 }
 
-onMounted(bootstrap)
+watch(
+  () => route.fullPath,
+  () => {
+    void syncRoute()
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -944,6 +1154,13 @@ onMounted(bootstrap)
         </header>
 
         <section class="workspace">
+          <nav v-if="breadcrumbs.length" class="breadcrumb" aria-label="面包屑导航">
+            <template v-for="(item, index) in breadcrumbs" :key="`${item.label}-${index}`">
+              <button v-if="item.to" type="button" @click="navigateTo(item.to)">{{ item.label }}</button>
+              <span v-else>{{ item.label }}</span>
+              <em v-if="index < breadcrumbs.length - 1">/</em>
+            </template>
+          </nav>
           <div v-if="errorText" class="notice error">
             <AlertCircle :size="18" />
             <span>{{ errorText }}</span>
@@ -1249,7 +1466,7 @@ onMounted(bootstrap)
           </section>
 
           <section v-if="viewName === 'tool-openapi'" class="page-stack">
-            <button class="back-link" @click="viewName = 'platform-detail'"><ArrowLeft :size="16" />返回平台</button>
+            <button class="back-link" @click="navigateTo(backRoute)"><ArrowLeft :size="16" />返回平台</button>
             <div class="panel">
               <div class="panel-head">
                 <div><h2>OpenAPI 导入</h2></div>
@@ -1359,7 +1576,7 @@ onMounted(bootstrap)
           </section>
 
           <section v-if="viewName === 'tool-editor'" class="page-stack">
-            <button class="back-link" @click="viewName = 'platform-detail'"><ArrowLeft :size="16" />返回平台</button>
+            <button class="back-link" @click="navigateTo(backRoute)"><ArrowLeft :size="16" />返回平台</button>
             <div class="panel">
               <div class="panel-head">
                 <div><h2>{{ selectedTool ? (canManagePlatform ? '编辑 Tool' : 'Tool 详情') : '新增 Tool' }}</h2></div>
