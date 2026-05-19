@@ -104,6 +104,7 @@ const platformApiKeyLoading = ref(false)
 const previewLoading = ref(false)
 const saving = ref(false)
 const savingPreviewKeys = ref<string[]>([])
+const platformSearchTimer = ref<number | null>(null)
 const errorText = ref('')
 const toastText = ref('')
 const newAdminUsername = ref('')
@@ -752,8 +753,27 @@ function confirmLogout() {
 }
 
 async function searchPlatforms() {
+  if (platformSearchTimer.value !== null) {
+    window.clearTimeout(platformSearchTimer.value)
+    platformSearchTimer.value = null
+  }
   platformPage.value = 1
   await loadPlatforms(1)
+}
+
+function schedulePlatformSearch() {
+  if (platformSearchTimer.value !== null) {
+    window.clearTimeout(platformSearchTimer.value)
+  }
+  platformSearchTimer.value = window.setTimeout(() => {
+    void searchPlatforms()
+  }, 320)
+}
+
+async function clearPlatformSearch() {
+  if (!searchText.value) return
+  searchText.value = ''
+  await searchPlatforms()
 }
 
 async function openPlatformById(platformId: string, mode: DetailMode) {
@@ -847,10 +867,6 @@ async function savePlatform() {
 function startKeyApply() {
   if (hasCurrentPlatformApiKey.value) return
   navigateTo({ name: 'platform-key-apply', params: { platformId: selectedPlatformId.value } })
-}
-
-async function goBackFromKeyApply() {
-  await navigateTo(backRoute.value)
 }
 
 async function submitKeyApply() {
@@ -1176,10 +1192,17 @@ watch(
               <div class="list-actions">
                 <div class="search">
                   <Search :size="16" />
-                  <input v-model="searchText" placeholder="搜索 platform 或名称" @keyup.enter="searchPlatforms" />
+                  <input
+                    v-model="searchText"
+                    placeholder="搜索 platform 或名称"
+                    @input="schedulePlatformSearch"
+                    @keyup.enter="searchPlatforms"
+                  />
+                  <button v-if="searchText" class="search-clear" type="button" title="清空搜索" @click="clearPlatformSearch">
+                    <X :size="14" />
+                  </button>
                 </div>
                 <button class="primary" @click="startCreatePlatform"><Plus :size="16" />注册平台</button>
-                <button class="secondary" @click="searchPlatforms">搜索</button>
               </div>
             </div>
             <div v-if="loading" class="empty large-empty"><Activity :size="30" /><span>正在加载平台</span></div>
@@ -1206,7 +1229,6 @@ watch(
           </section>
 
           <section v-if="viewName === 'managed-platforms'" class="page-stack">
-            <div class="page-title"><div><h1>我管理的</h1></div></div>
             <div class="platform-grid">
               <button v-for="platform in adminPlatforms" :key="platform.platformId" class="platform-card" @click="openManagedPlatform(platform)">
                 <span class="card-topline"><span class="status-dot"></span><span class="badge admin-badge">{{ platform.adminRole }}</span></span>
@@ -1227,7 +1249,6 @@ watch(
           </section>
 
           <section v-if="viewName === 'used-platforms'" class="page-stack">
-            <div class="page-title"><div><h1>我使用的</h1></div></div>
             <div class="platform-grid">
               <button v-for="platform in usedPlatforms" :key="platform.platformId" class="platform-card" @click="openPlatform(platform, 'readonly')">
                 <span class="card-topline"><span class="status-dot"></span><span class="badge">已授权</span></span>
@@ -1248,7 +1269,6 @@ watch(
           </section>
 
           <section v-if="viewName === 'my-api-keys'" class="page-stack">
-            <div class="page-title"><div><h1>我的 API Key</h1></div></div>
             <div class="panel">
               <div class="data-table api-key-table">
                 <div class="data-head"><span>平台</span><span>API Key</span><span>状态</span></div>
@@ -1271,8 +1291,7 @@ watch(
           </section>
 
           <section v-if="viewName === 'my-key-applies'" class="page-stack">
-            <div class="page-title">
-              <div><h1>我的申请</h1></div>
+            <div class="page-title page-actions-only">
               <div class="segment">
                 <button v-for="option in statusOptions" :key="option.value" :class="{ active: myApplyStatus === option.value }" @click="changeMyApplyStatus(option.value)">{{ option.label }}</button>
               </div>
@@ -1300,8 +1319,7 @@ watch(
           </section>
 
           <section v-if="viewName === 'my-approvals'" class="page-stack">
-            <div class="page-title">
-              <div><h1>我的审批</h1></div>
+            <div class="page-title page-actions-only">
               <div class="segment">
                 <button v-for="option in statusOptions" :key="option.value" :class="{ active: approvalStatus === option.value }" @click="changeApprovalStatus(option.value)">{{ option.label }}</button>
               </div>
@@ -1423,9 +1441,6 @@ watch(
           </section>
 
           <section v-if="viewName === 'key-apply'" class="page-stack narrow">
-            <button class="back-link" @click="goBackFromKeyApply">
-              <ArrowLeft :size="16" />{{ keyApplyFromDetail ? '返回平台' : '返回我的 API Key' }}
-            </button>
             <div class="panel">
               <div class="panel-head"><div><h2>授权申请</h2></div></div>
               <div class="form-grid">
