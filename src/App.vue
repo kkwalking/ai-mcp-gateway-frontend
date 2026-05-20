@@ -17,6 +17,8 @@ import {
   KeyRound,
   LayoutDashboard,
   LogOut,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
   Power,
@@ -105,6 +107,7 @@ const previewLoading = ref(false)
 const saving = ref(false)
 const savingPreviewKeys = ref<string[]>([])
 const platformSearchTimer = ref<number | null>(null)
+const sidebarCollapsed = ref(false)
 const errorText = ref('')
 const toastText = ref('')
 const newAdminUsername = ref('')
@@ -274,6 +277,10 @@ function showFailureModal(title: string, error: unknown) {
 
 function closeMessageModal() {
   messageModal.value = null
+}
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
 }
 
 function resetPlatformForm() {
@@ -1109,7 +1116,7 @@ watch(
 </script>
 
 <template>
-  <main class="app-shell">
+  <main class="app-shell" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
     <section v-if="viewName === 'login'" class="login-screen">
       <div class="login-panel">
         <span class="brand-mark"><Server :size="24" /></span>
@@ -1126,34 +1133,45 @@ watch(
 
     <template v-else>
       <aside class="sidebar">
-        <button class="brand sidebar-brand" @click="navigate('platform-list')">
-          <span class="brand-mark"><Server :size="20" /></span>
-          <strong>AI MCP Gateway</strong>
-        </button>
+        <div class="sidebar-top">
+          <button class="brand sidebar-brand" title="平台列表" @click="navigate('platform-list')">
+            <span class="brand-mark"><Server :size="20" /></span>
+            <strong>AI MCP Gateway</strong>
+          </button>
+          <button
+            class="sidebar-toggle"
+            type="button"
+            :title="sidebarCollapsed ? '展开菜单' : '收缩菜单'"
+            @click="toggleSidebar"
+          >
+            <PanelLeftOpen v-if="sidebarCollapsed" :size="18" />
+            <PanelLeftClose v-else :size="18" />
+          </button>
+        </div>
         <nav class="sidebar-nav">
           <button :class="{ active: activeMenu === 'platform-list' }" @click="navigate('platform-list')">
-            <LayoutDashboard :size="17" />平台列表
+            <LayoutDashboard :size="17" /><span>平台列表</span>
           </button>
           <p>平台管理</p>
           <button :class="{ active: activeMenu === 'managed-platforms' }" @click="navigate('managed-platforms')">
-            <ShieldCheck :size="17" />我管理的
+            <ShieldCheck :size="17" /><span>我管理的</span>
           </button>
           <button :class="{ active: activeMenu === 'used-platforms' }" @click="navigate('used-platforms')">
-            <Users :size="17" />我使用的
+            <Users :size="17" /><span>我使用的</span>
           </button>
           <p>审批</p>
           <button :class="{ active: activeMenu === 'my-key-applies' }" @click="navigate('my-key-applies')">
-            <Inbox :size="17" />我的申请
+            <Inbox :size="17" /><span>我的申请</span>
           </button>
           <button :class="{ active: activeMenu === 'my-approvals' }" @click="navigate('my-approvals')">
-            <ClipboardCheck :size="17" />我的审批
+            <ClipboardCheck :size="17" /><span>我的审批</span>
           </button>
           <p>API Key</p>
           <button :class="{ active: activeMenu === 'my-api-keys' }" @click="navigate('my-api-keys')">
-            <KeyRound :size="17" />我的
+            <KeyRound :size="17" /><span>我的</span>
           </button>
           <button :class="{ active: activeMenu === 'key-apply' }" @click="navigate('key-apply')">
-            <Plus :size="17" />申请
+            <Plus :size="17" /><span>申请</span>
           </button>
         </nav>
       </aside>
