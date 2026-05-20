@@ -64,6 +64,7 @@ type DetailMode = 'readonly' | 'manage'
 type ApplyStatus = 0 | 1 | 2
 type MessageModalState = { type: 'success' | 'error' | 'warning'; title: string; text: string } | null
 type BreadcrumbItem = { label: string; to?: RouteLocationRaw }
+type OpenApiEndpointOption = { path: string; method: string; summary: string; operationId: string }
 
 const DEFAULT_PAGE_SIZE = 10
 const route = useRoute()
@@ -106,6 +107,8 @@ const platformApiKeyLoading = ref(false)
 const previewLoading = ref(false)
 const saving = ref(false)
 const savingPreviewKeys = ref<string[]>([])
+const openApiEndpointSearch = ref('')
+const selectedOpenApiEndpoints = ref<string[]>([])
 const platformSearchTimer = ref<number | null>(null)
 const sidebarCollapsed = ref(false)
 const errorText = ref('')
@@ -156,6 +159,26 @@ const toolForm = reactive<PlatformTool>({
 })
 
 const selectedTool = computed(() => tools.value.find((tool) => tool.toolId === selectedToolId.value))
+const openApiParseResult = computed(() => parseOpenApiEndpoints(openApiForm.openApiJson))
+const openApiEndpoints = computed(() => openApiParseResult.value.endpoints)
+const openApiEndpointKeySignature = computed(() => openApiEndpoints.value.map((endpoint) => endpoint.path).join('\n'))
+const filteredOpenApiEndpoints = computed(() => {
+  const keyword = openApiEndpointSearch.value.trim().toLowerCase()
+  if (!keyword) return openApiEndpoints.value
+  return openApiEndpoints.value.filter((endpoint) =>
+    endpoint.path.toLowerCase().includes(keyword)
+    || endpoint.method.toLowerCase().includes(keyword)
+    || endpoint.summary.toLowerCase().includes(keyword)
+    || endpoint.operationId.toLowerCase().includes(keyword),
+  )
+})
+const selectedOpenApiEndpointSet = computed(() => new Set(selectedOpenApiEndpoints.value))
+const openApiPreviewDisabled = computed(() =>
+  previewLoading.value
+  || !openApiForm.openApiJson.trim()
+  || Boolean(openApiParseResult.value.error)
+  || (openApiEndpoints.value.length > 0 && selectedOpenApiEndpoints.value.length === 0),
+)
 const managedPlatforms = computed(() => currentUser.value?.managedPlatforms || [])
 const managedPlatformIds = computed(() =>
   new Set([...managedPlatforms.value, ...adminPlatforms.value].map((item) => item.platformId)),
@@ -319,6 +342,49 @@ function blankTool(): PlatformTool {
     },
     mappings: [],
   }
+}
+
+function parseOpenApiEndpoints(openApiJson: string): { endpoints: OpenApiEndpointOption[]; error: string } {
+  if (!openApiJson.trim()) {
+    return { endpoints: [], error: '' }
+  }
+
+  try {
+    const root = JSON.parse(openApiJson) as { paths?: Record<string, Record<string, any>> }
+    if (!root.paths || typeof root.paths !== 'object' || Array.isArray(root.paths)) {
+      return { endpoints: [], error: 'OpenAPI JSON 中未找到 paths 配置' }
+    }
+
+    const methodPriority = ['get', 'post', 'put', 'delete', 'patch', 'head', 'options']
+    const endpoints = Object.entries(root.paths).map(([path, pathItem]) => {
+      const method = methodPriority.find((item) => pathItem && typeof pathItem === 'object' && item in pathItem) || 'post'
+      const operation = pathItem?.[method] || {}
+      return {
+        path,
+        method: method.toUpperCase(),
+        summary: typeof operation.summary === 'string' ? operation.summary : '',
+        operationId: typeof operation.operationId === 'string' ? operation.operationId : '',
+      }
+    })
+
+    return { endpoints, error: endpoints.length ? '' : 'OpenAPI paths 中没有可导入的端点' }
+  } catch {
+    return { endpoints: [], error: 'OpenAPI JSON 格式不正确' }
+  }
+}
+
+function selectAllOpenApiEndpoints() {
+  selectedOpenApiEndpoints.value = openApiEndpoints.value.map((endpoint) => endpoint.path)
+}
+
+function clearOpenApiEndpointSelection() {
+  selectedOpenApiEndpoints.value = []
+}
+
+function toggleOpenApiEndpoint(path: string) {
+  selectedOpenApiEndpoints.value = selectedOpenApiEndpointSet.value.has(path)
+    ? selectedOpenApiEndpoints.value.filter((item) => item !== path)
+    : [...selectedOpenApiEndpoints.value, path]
 }
 
 function platformLabel(platformId: string) {
@@ -690,9 +756,11 @@ async function syncRoute() {
     previews.value = []
     expandedPreviewTools.value = []
     savingPreviewKeys.value = []
+    openApiEndpointSearch.value = ''
     if (!openApiForm.openApiJson.trim()) {
       openApiForm.openApiJson = sampleOpenApiJson
     }
+    selectAllOpenApiEndpoints()
     await loadPlatformDetail(platformId, 'manage')
   }
 }
@@ -970,6 +1038,7 @@ function removeMapping(index: number) {
 
 async function previewOpenApi() {
   if (!selectedPlatformId.value) return
+  if (openApiPreviewDisabled.value) return
   previewLoading.value = true
   previews.value = []
   expandedPreviewTools.value = []
@@ -977,6 +1046,7 @@ async function previewOpenApi() {
   try {
     previews.value = await gatewayApi.previewOpenApi(selectedPlatformId.value, {
       openApiJson: openApiForm.openApiJson,
+      endpoints: selectedOpenApiEndpoints.value,
     })
   } catch (error) {
     handleError(error)
@@ -1105,6 +1175,14 @@ async function changeApprovalStatus(status: ApplyStatus) {
   approvalPage.value = 1
   await loadMyApprovals(1)
 }
+
+watch(openApiEndpointKeySignature, () => {
+  selectAllOpenApiEndpoints()
+  openApiEndpointSearch.value = ''
+  previews.value = []
+  expandedPreviewTools.value = []
+  savingPreviewKeys.value = []
+}, { immediate: true })
 
 watch(
   () => route.fullPath,
@@ -1503,7 +1581,7 @@ watch(
             <div class="panel">
               <div class="panel-head">
                 <div><h2>OpenAPI 导入</h2></div>
-                <button class="primary" :disabled="previewLoading || !openApiForm.openApiJson.trim()" @click="previewOpenApi">
+                <button class="primary" :disabled="openApiPreviewDisabled" @click="previewOpenApi">
                   <FileJson :size="16" />{{ previewLoading ? '解析中' : '解析预览' }}
                 </button>
               </div>
@@ -1511,6 +1589,56 @@ watch(
                 OpenAPI JSON
                 <textarea v-model="openApiForm.openApiJson" class="json-area" rows="16"></textarea>
               </label>
+              <div class="endpoint-picker">
+                <div class="endpoint-picker-head">
+                  <div>
+                    <strong>接口选择</strong>
+                    <em v-if="openApiEndpoints.length">
+                      已选择 {{ selectedOpenApiEndpoints.length }} / {{ openApiEndpoints.length }}
+                    </em>
+                    <em v-else>{{ openApiParseResult.error || '粘贴 OpenAPI JSON 后展示 paths' }}</em>
+                  </div>
+                  <div class="endpoint-actions">
+                    <button class="secondary compact" :disabled="!openApiEndpoints.length" @click="selectAllOpenApiEndpoints">
+                      <CheckCircle2 :size="15" />
+                      全选
+                    </button>
+                    <button class="secondary compact" :disabled="!selectedOpenApiEndpoints.length" @click="clearOpenApiEndpointSelection">
+                      <X :size="15" />
+                      清空
+                    </button>
+                  </div>
+                </div>
+                <div v-if="openApiEndpoints.length" class="search endpoint-search">
+                  <Search :size="16" />
+                  <input v-model="openApiEndpointSearch" placeholder="搜索 path、method、summary 或 operationId" />
+                </div>
+                <div v-if="openApiParseResult.error" class="endpoint-hint warning">{{ openApiParseResult.error }}</div>
+                <div v-else-if="openApiEndpoints.length && selectedOpenApiEndpoints.length === 0" class="endpoint-hint warning">
+                  请至少选择一个接口再解析预览。
+                </div>
+                <div v-if="openApiEndpoints.length" class="endpoint-list">
+                  <button
+                    v-for="endpoint in filteredOpenApiEndpoints"
+                    :key="endpoint.path"
+                    type="button"
+                    class="endpoint-option"
+                    :class="{ selected: selectedOpenApiEndpointSet.has(endpoint.path) }"
+                    @click="toggleOpenApiEndpoint(endpoint.path)"
+                  >
+                    <span class="endpoint-check">
+                      <CheckCircle2 v-if="selectedOpenApiEndpointSet.has(endpoint.path)" :size="16" />
+                    </span>
+                    <span class="badge">{{ endpoint.method }}</span>
+                    <strong>{{ endpoint.path }}</strong>
+                    <em>{{ endpoint.summary || endpoint.operationId || '暂无描述' }}</em>
+                  </button>
+                  <div v-if="filteredOpenApiEndpoints.length === 0" class="empty compact-empty">
+                    <Search :size="22" />
+                    <span>没有匹配的接口</span>
+                  </div>
+                </div>
+              </div>
               <div v-if="previews.length" class="preview-list">
                 <article v-for="(preview, previewIndex) in previews" :key="`${preview.toolName}-${previewIndex}`" class="preview-card">
                   <div class="preview-row">
