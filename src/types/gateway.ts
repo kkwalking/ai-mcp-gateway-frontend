@@ -87,6 +87,21 @@ export interface HttpConfig {
   isDeleted?: number
 }
 
+export interface DubboConfig {
+  registryAddress?: string | null
+  registryProtocol?: string | null
+  interfaceName: string
+  methodName: string
+  version?: string | null
+  group?: string | null
+  parameterTypes: string[]
+  timeout?: number
+  retries?: number
+  directUrl?: string | null
+  enable?: number
+  isDeleted?: number
+}
+
 export interface ProtocolMapping {
   mappingType: 'request' | 'response' | string
   parentPath?: string | null
@@ -111,6 +126,7 @@ export interface PlatformTool {
   enable: number
   isDeleted?: number
   httpConfig: HttpConfig
+  dubboConfig?: DubboConfig | null
   mappings: ProtocolMapping[]
   createTime?: TimestampMillis
   updateTime?: TimestampMillis
